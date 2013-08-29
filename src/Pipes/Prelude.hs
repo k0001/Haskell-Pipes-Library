@@ -21,13 +21,15 @@
 module Pipes.Prelude (
     -- * Producers
     -- $producers
-    stdin,
-    fromHandle,
+    getLine,
+    hGetLine,
 
     -- * Consumers
     -- $consumers
-    stdout,
-    toHandle,
+    putStr,
+    putStrLn,
+    hPutStr,
+    hPutStrLn,
 
     -- * Pipes
     -- $pipes
@@ -75,6 +77,7 @@ import Control.Exception (throwIO, try)
 import Control.Monad (liftM, replicateM_, when, unless)
 import Control.Monad.Trans.State.Strict (get, put)
 import Data.Functor.Identity (Identity, runIdentity)
+import Foreign.C.Error (Errno(Errno), ePIPE)
 import qualified GHC.IO.Exception as G
 import Pipes
 import Pipes.Core
@@ -89,12 +92,15 @@ import Prelude hiding (
     drop,
     dropWhile,
     filter,
+    getLine,
     head,
     last,
     length,
     map,
     mapM,
     null,
+    putStr,
+    putStrLn,
     read,
     show,
     take,
@@ -121,28 +127,28 @@ ABC
 
 -}
 
-{-| Read 'String's from 'IO.stdin' using 'getLine'
+{-| Read 'String's from 'IO.stdin' using 'getLine' from "System.IO".
 
-    Terminates on end of input
+    Silently terminates on end of input
 -}
-stdin :: Producer' String IO ()
-stdin = fromHandle IO.stdin
-{-# INLINABLE stdin #-}
+getLine :: Producer' String IO ()
+getLine = hGetLine IO.stdin
+{-# INLINE getLine #-}
 
-{-| Read 'String's from a 'IO.Handle' using 'IO.hGetLine'
+{-| Read 'String's from a 'IO.Handle' using 'IO.hGetLine' from "System.IO".
 
-    Terminates on end of input
+    Silently terminates on end of input
 -}
-fromHandle :: IO.Handle -> Producer' String IO ()
-fromHandle h = go
+hGetLine :: IO.Handle -> Producer' String IO ()
+hGetLine h = loop
   where
-    go = do
-        eof <- lift $ IO.hIsEOF h
+    loop = do
+        eof <- lift (IO.hIsEOF h)
         unless eof $ do
-            str <- lift $ IO.hGetLine h
+            str <- lift (IO.hGetLine h)
             yield str
-            go
-{-# INLINABLE fromHandle #-}
+            loop
+{-# INLINABLE hGetLine #-}
 
 {- $consumers
     Feed a 'Consumer' the same value repeatedly using ('>~'):
@@ -156,30 +162,53 @@ ABC
 
 -}
 
-{-| Write 'String's to 'IO.stdout' using 'putStrLn'
+{-| Write 'String's to /standard output/ using 'IO.putStr' from "System.IO".
 
-    Terminates on a broken output pipe
+    Silently terminates on a broken output pipe.
 -}
-stdout :: Consumer' String IO ()
-stdout = toHandle IO.stdout
-{-# INLINABLE stdout #-}
-
-{-| Write 'String's to a 'IO.Handle' using 'IO.hPutStrLn'
-
-    Terminates on a broken output pipe
--}
-toHandle :: IO.Handle -> Consumer' String IO ()
-toHandle handle = do
-    loop
+putStr :: Consumer' String IO ()
+putStr = loop
   where
     loop = do
         str <- await
-        x   <- lift $ try $ IO.hPutStrLn handle str
-        case x of
-            Left e@(G.IOError { G.ioe_type = t}) ->
-                lift $ unless (t == G.ResourceVanished) $ throwIO e
-            Right () -> loop
-{-# INLINABLE toHandle #-}
+        eu <- lift (try (IO.putStr str))
+        case eu of
+           Left (G.IOError { G.ioe_type  = G.ResourceVanished
+                           , G.ioe_errno = Just ioe }
+                ) | Errno ioe == ePIPE
+                    -> return ()
+           Left e   -> lift (throwIO e)
+           Right () -> loop
+{-# INLINABLE putStr #-}
+
+{-| Write 'String's to /standard output/ using 'IO.putStrLn' from "System.IO".
+
+    Silently terminates on a broken output pipe.
+-}
+putStrLn :: Consumer' String IO ()
+putStrLn = loop -- Appending "\n" and relying on 'putStr' is not as efficient.
+  where
+    loop = do
+        str <- await
+        eu <- lift (try (IO.putStrLn str))
+        case eu of
+           Left (G.IOError { G.ioe_type  = G.ResourceVanished
+                           , G.ioe_errno = Just ioe }
+                ) | Errno ioe == ePIPE
+                    -> return ()
+           Left e   -> lift (throwIO e)
+           Right () -> loop
+{-# INLINABLE putStrLn #-}
+
+-- | Write 'String's to a 'IO.Handle' using 'IO.hPutStr' from "System.IO".
+hPutStr :: IO.Handle -> Consumer' String IO r
+hPutStr handle = for cat (\a -> lift (IO.hPutStr handle a))
+{-# INLINE hPutStr #-}
+
+-- | Write 'String's to a 'IO.Handle' using 'IO.hPutStrLn' from "System.IO".
+hPutStrLn :: IO.Handle -> Consumer' String IO r
+hPutStrLn handle = for cat (\a -> lift (IO.hPutStrLn handle a))
+{-# INLINE hPutStrLn #-}
 
 {- $pipes
     Use ('>->') to connect 'Producer's, 'Pipe's, and 'Consumer's:
