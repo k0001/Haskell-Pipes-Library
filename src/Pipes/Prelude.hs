@@ -127,7 +127,7 @@ ABC
 
 -}
 
-{-| Read 'String's from 'IO.stdin' using 'getLine' from "System.IO".
+{-| Read 'String's from 'IO.stdin' using 'IO.getLine' from "System.IO".
 
     Silently terminates on end of input
 -}
